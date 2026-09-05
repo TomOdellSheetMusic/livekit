@@ -430,12 +430,18 @@ func (s *LivekitServer) healthCheck(w http.ResponseWriter, _ *http.Request) {
 func (s *LivekitServer) backgroundWorker() {
 	roomTicker := time.NewTicker(1 * time.Second)
 	defer roomTicker.Stop()
+	// permanent rooms are re-homed / store-refreshed at a coarser interval so
+	// we don't hammer the router and store on every tick.
+	permanentRoomTicker := time.NewTicker(s.roomManager.permanentRoomInterval())
+	defer permanentRoomTicker.Stop()
 	for {
 		select {
 		case <-s.doneChan:
 			return
 		case <-roomTicker.C:
 			s.roomManager.CloseIdleRooms()
+		case <-permanentRoomTicker.C:
+			s.roomManager.KeepPermanentRoomsAlive()
 		}
 	}
 }

@@ -238,6 +238,19 @@ type RoomConfig struct {
 	AutoCreate         bool               `yaml:"auto_create,omitempty"`
 	EnabledCodecs      []CodecSpec        `yaml:"enabled_codecs,omitempty"`
 	MaxParticipants    uint32             `yaml:"max_participants,omitempty"`
+	// PermanentRoom is the interval at which the room controller pings
+	// permanent rooms to keep them alive, re-home them across nodes, and
+	// prevent the room store from GC-ing their records.
+	//
+	// Permanent rooms are ones that should persist even when they have no
+	// participants (e.g. long-lived voice-chat rooms in Matrix). They must be
+	// created with Permanent set on the CreateRoomRequest, or match a name in
+	// PermanentRooms below.
+	PermanentRoomInterval time.Duration `yaml:"permanent_room_interval,omitempty"`
+	// PermanentRooms is a list of room name prefixes that should always be
+	// treated as permanent. Names are checked with strings.HasPrefix so a
+	// stable Matrix room-id prefix can keep a whole namespace alive.
+	PermanentRooms []string `yaml:"permanent_rooms,omitempty"`
 	EmptyTimeout       uint32             `yaml:"empty_timeout,omitempty"`
 	DepartureTimeout   uint32             `yaml:"departure_timeout,omitempty"`
 	EnableRemoteUnmute bool               `yaml:"enable_remote_unmute,omitempty"`
@@ -256,6 +269,22 @@ type RoomConfig struct {
 	// deprecated, moved to limits
 	MaxParticipantIdentityLength int                                   `yaml:"max_participant_identity_length,omitempty"`
 	RoomConfigurations           map[string]*livekit.RoomConfiguration `yaml:"room_configurations,omitempty"`
+}
+
+// IsPermanentRoom reports whether a room name should be treated as a
+// permanent room, based on the configured permanent room name prefixes.
+// It also matches names that start with the legacy numeric prefix that
+// clients sometimes use for pre-provisioned rooms.
+func (c *RoomConfig) IsPermanentRoom(roomName string) bool {
+	if len(c.PermanentRooms) == 0 {
+		return false
+	}
+	for _, prefix := range c.PermanentRooms {
+		if strings.HasPrefix(roomName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type CodecSpec struct {
@@ -562,6 +591,7 @@ var DefaultConfig = Config{
 		},
 		EmptyTimeout:          5 * 60,
 		DepartureTimeout:      20,
+		PermanentRoomInterval: 30 * time.Second,
 		CreateRoomTimeout:     10 * time.Second,
 		CreateRoomAttempts:    3,
 		UpdateBatchTargetSize: 128 * 1024,

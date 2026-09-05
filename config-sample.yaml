@@ -214,6 +214,17 @@ keys:
 #   departure_timeout: 20
 #   # limit number of participants that can be in a room, 0 for no limit
 #   max_participants: 0
+#   # how often the room controller pings permanent rooms to keep them alive,
+#   # re-home them across nodes, and keep their records in the room store.
+#   # Permanent rooms are not closed when they become empty. Requires the room
+#   # to be created with permanent: true or match a prefix in permanent_rooms.
+#   # permanent_room_interval: 30s
+#   # room names (or name prefixes) that should be kept alive as permanent
+#   # rooms even when empty. Names are matched with a prefix check so a stable
+#   # Matrix room-id prefix can keep a whole namespace permanent.
+#   # permanent_rooms:
+#   #   - "!voice:matrix.example.org"
+#   #   - "perm-"
 #   # only accept specific codecs for clients publishing to this room
 #   # this is useful to standardize codecs across clients
 #   # other supported codecs are video/h264, video/vp9, video/av1, audio/red

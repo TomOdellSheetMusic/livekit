@@ -227,6 +227,71 @@ func (r *RoomManager) CloseIdleRooms() {
 	}
 }
 
+// permanentRoomInterval returns how often the room controller pings permanent
+// rooms. Defaults to the configured value, which in turn defaults to 30s.
+func (r *RoomManager) permanentRoomInterval() time.Duration {
+	if r.config.Room.PermanentRoomInterval <= 0 {
+		return 30 * time.Second
+	}
+	return r.config.Room.PermanentRoomInterval
+}
+
+// KeepPermanentRoomsAlive ensures every permanent room stays warm and
+// reachable. For each permanent room currently hosted on this node it:
+//
+//  1. Re-selects (and if needed re-homes) the node hosting the room in the
+//     router. If the previously assigned node is gone or drained, this re-pins
+//     the room to a healthy node, recovering from the single-node-homing
+//     limitation of permanent rooms.
+//  2. Re-persists the room record in the shared room store, so a permanent
+//     empty room keeps its record (Redis room hashes have no TTL, but the
+//     record is normally deleted on close; we ensure it stays present).
+//
+// Permanent rooms are never closed on becoming empty (see rtc.Room.
+// CloseIfEmpty), so as long as the server process is alive the in-memory room
+// stays warm, giving the next participant a fast join path.
+func (r *RoomManager) KeepPermanentRoomsAlive() {
+	// Only the node currently selected to host each permanent room performs
+	// the keepalive. In a single-node deployment this is always this node.
+	type entry struct {
+		name livekit.RoomName
+		room *rtc.Room
+	}
+	var permanent []entry
+
+	r.lock.RLock()
+	for name, room := range r.rooms {
+		if room.Permanent() {
+			permanent = append(permanent, entry{name: name, room: room})
+		}
+	}
+	r.lock.RUnlock()
+
+	if len(permanent) == 0 {
+		return
+	}
+
+	ctx := context.Background()
+	for _, e := range permanent {
+		if e.room.IsClosed() {
+			continue
+		}
+
+		// Re-home the room to a healthy node if its current assignment has
+		// gone away. SelectRoomNode keeps an existing healthy assignment.
+		if err := r.roomAllocator.SelectRoomNode(ctx, e.name, ""); err != nil {
+			e.room.Logger().Warnw("could not re-home permanent room", err)
+			continue
+		}
+
+		// Refresh the durable record in the shared room store. No-op for the
+		// in-memory store but important when the store is shared (Redis).
+		if err := r.roomStore.StoreRoom(ctx, e.room.ToProto(), e.room.Internal()); err != nil {
+			e.room.Logger().Warnw("could not persist permanent room", err)
+		}
+	}
+}
+
 func (r *RoomManager) HasParticipants() bool {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
@@ -674,6 +739,11 @@ func (r *RoomManager) getOrCreateRoom(ctx context.Context, createRoom *livekit.C
 
 	// construct ice servers
 	newRoom := rtc.NewRoom(ri, internal, *r.rtcConfig, r.config.Room, &r.config.Audio, r.serverInfo, r.telemetry, r.agentClient, r.agentStore, r.egressLauncher)
+	// A room is permanent if it matches one of the configured permanent room
+	// name prefixes. Permanent rooms are kept alive by the room controller
+	// instead of being closed on becoming empty, which lets long-lived
+	// voice-chat rooms stay warm for lower connection latency.
+	newRoom.SetPermanent(r.config.Room.IsPermanentRoom(createRoom.Name))
 
 	roomTopic := rpc.FormatRoomTopic(roomName)
 	roomServer := must.Get(rpc.NewTypedRoomServer(r, r.bus))

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
@@ -40,6 +41,33 @@ func TestConfig_DefaultsKept(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, true, conf.Room.AutoCreate)
 	require.Equal(t, uint32(10), conf.Room.EmptyTimeout)
+}
+
+func TestConfig_PermanentRoomDefaults(t *testing.T) {
+	conf, err := NewConfig("", true, nil, nil)
+	require.NoError(t, err)
+	// default keepalive interval is 30s
+	require.Equal(t, 30*time.Second, conf.Room.PermanentRoomInterval)
+	// with no prefixes configured, nothing is permanent
+	require.Empty(t, conf.Room.PermanentRooms)
+	require.False(t, conf.Room.IsPermanentRoom("!voice:example.org"))
+}
+
+func TestConfig_PermanentRoomUnmarshal(t *testing.T) {
+	const content = `room:
+  permanent_room_interval: 15s
+  permanent_rooms:
+    - "!voice:example.org"
+    - "perm-"`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, conf.Room.PermanentRoomInterval)
+	require.Len(t, conf.Room.PermanentRooms, 2)
+	require.True(t, conf.Room.IsPermanentRoom("!voice:example.org"))
+	require.True(t, conf.Room.IsPermanentRoom("!voice:example.org:extra"))
+	require.True(t, conf.Room.IsPermanentRoom("perm-abcdef"))
+	require.False(t, conf.Room.IsPermanentRoom("!other:example.org"))
+	require.False(t, conf.Room.IsPermanentRoom("perm"))
 }
 
 func TestConfig_SignalMessageSizeLimitDefaults(t *testing.T) {

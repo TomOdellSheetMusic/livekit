@@ -430,6 +430,53 @@ func TestRoomClosure(t *testing.T) {
 		require.True(t, isClosed)
 		require.Equal(t, types.RoomCloseReasonIdleTimeout, closeReason)
 	})
+
+	t.Run("permanent room does not close even after departure timeout", func(t *testing.T) {
+		rm := newRoomWithParticipants(t, testRoomOpts{num: 0})
+		rm.SetPermanent(true)
+		isClosed := false
+		var closeReason types.RoomCloseReason
+		rm.OnClose(func(reason types.RoomCloseReason) {
+			isClosed = true
+			closeReason = reason
+		})
+		// Even with an empty timeout of zero and after simulating that the room
+		// was created a long time ago, a permanent room must stay open so that
+		// the next participant can join a warm room.
+		rm.lock.Lock()
+		rm.protoRoom.EmptyTimeout = 0
+		rm.protoRoom.CreationTime = time.Now().Unix() - 60*60
+		rm.lock.Unlock()
+
+		rm.CloseIfEmpty()
+		require.False(t, isClosed)
+		require.Equal(t, types.RoomCloseReasonUnknown, closeReason)
+		require.True(t, rm.Permanent())
+	})
+
+	t.Run("non-permanent room closes while permanent room stays open", func(t *testing.T) {
+		permanent := newRoomWithParticipants(t, testRoomOpts{num: 0})
+		permanent.SetPermanent(true)
+		normal := newRoomWithParticipants(t, testRoomOpts{num: 0})
+		normalClosed := false
+		permanentClosed := false
+		permanent.OnClose(func(types.RoomCloseReason) { permanentClosed = true })
+		normal.OnClose(func(types.RoomCloseReason) { normalClosed = true })
+
+		// Simulate both rooms having been empty past their empty timeout.
+		for _, rm := range []*Room{permanent, normal} {
+			rm.lock.Lock()
+			rm.protoRoom.EmptyTimeout = 1
+			rm.lock.Unlock()
+		}
+		time.Sleep(1010 * time.Millisecond)
+
+		permanent.CloseIfEmpty()
+		normal.CloseIfEmpty()
+
+		require.False(t, permanentClosed, "permanent room must not close when empty")
+		require.True(t, normalClosed, "non-permanent room must close when empty past timeout")
+	})
 }
 
 func TestNewTrack(t *testing.T) {

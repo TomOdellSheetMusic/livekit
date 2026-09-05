@@ -99,6 +99,9 @@ type Room struct {
 	// time that the last participant left the room
 	leftAt atomic.Int64
 	holds  atomic.Int32
+	// permanent rooms are kept alive even when empty; set at construction
+	// based on the CreateRoomRequest / config and never changes afterwards.
+	permanent bool
 
 	lock sync.RWMutex
 
@@ -421,6 +424,23 @@ func (r *Room) LastLeftAt() int64 {
 
 func (r *Room) Internal() *livekit.RoomInternal {
 	return r.internal
+}
+
+// Permanent reports whether this room should be kept alive even when it has
+// no participants. Permanent rooms are used for long-lived voice-chat rooms
+// so that participants can connect with lower latency instead of triggering
+// a cold room bootstrap on every join.
+//
+// It is only safe to query while holding r.lock.
+func (r *Room) Permanent() bool {
+	return r.permanent
+}
+
+// SetPermanent marks the room as permanent. It must be called before the room
+// becomes candidate for idle-closing (i.e. during construction), otherwise the
+// change is ignored because the flag is read without synchronization.
+func (r *Room) SetPermanent(value bool) {
+	r.permanent = value
 }
 
 func (r *Room) Hold() bool {
@@ -775,6 +795,14 @@ func (r *Room) CloseIfEmpty() {
 	r.lock.Lock()
 
 	if r.IsClosed() || r.holds.Load() > 0 {
+		r.lock.Unlock()
+		return
+	}
+
+	// Permanent rooms must survive even when entirely empty. The room
+	// controller keeps re-homing them and refreshing their store records, so
+	// they provide a warm path for the next participant to join quickly.
+	if r.permanent {
 		r.lock.Unlock()
 		return
 	}
